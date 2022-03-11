@@ -1,0 +1,1041 @@
+library(tidyverse)
+library(magrittr)
+library(DESeq2)
+library(ggrepel)
+library(ggpubr)
+library(patchwork)
+library(scales)
+library(IHW)
+library(fgsea)
+library(scales)
+library(data.table)
+library(ggplot2)
+library(BiocParallel)
+
+
+new.exp <- function(experimentname){
+  dir.create(experimentname)
+  setwd(paste("./", experimentname, sep= ""))
+  dir.create("Rdafiles")
+  dir.create("deseq")
+  dir.create("gsea")
+  dir.create("ipaoutput")
+  dir.create("plots")
+  setwd("..")
+}
+
+deseqresults <- function(dds, #A DESeq object
+                         methods = c("ape.adapt"),
+                         contrastVars = NULL, #REGEX
+                         writefiles = TRUE, 
+                         checkgsea = FALSE
+                         ){
+  
+  stopifnot(methods %in% c("ape.adapt", "ape.noadapt", "ashr"))
+  stopifnot(class(dds) == "DESeqDataSet")
+  #Extract the experiment name from dds object
+  expname <- deparse(substitute(dds)) %>% str_remove(".dds")
+  dir.create(expname) 
+  setwd(expname)
+  paste("Current experiment", expname, "...") %>% print
+  
+  #Write the transcript count and metadata used for this experiment in the folder
+  dds %>% colData %>% as.data.frame %>%
+    write_csv(file = paste(expname,".subjects.csv", sep = ""))
+  dds %>% counts %>% as.data.frame %>%  rownames_to_column("ensembl_gene_id") %>%
+    write_csv(file = paste(expname,".genes.csv", sep = ""))
+  
+  if(is.null(contrastVars)){
+    contrastVars<- design(dds) %>% as.character %>% extract(2) %>% str_remove(".+\\+") %>% str_remove(" +")
+  }
+
+  resnames <- resultsNames(dds)[which(str_detect(resultsNames(dds), contrastVars))]
+  
+  #Extract results for each coef using selected methods
+  for(coefname in resnames){
+    resultfolder <- coefname %>% str_remove(".+?_") %>% str_remove_all("_") 
+    new.exp(resultfolder)
+    setwd(resultfolder)
+    for (method in methods){
+      resultname <- paste(expname, ".", resultfolder, ".", method, sep ="")
+      paste("Applying", method, "to", expname, "for coef", resultfolder, "...") %>% print
+      print(dds)
+      print(method)
+      print(coefname)
+      
+      if(method == "ashr"){
+        foo <- lfcShrink(dds, type = "ashr", coef = coefname,parallel = T)
+      }
+      
+      if(method == "ape.adapt"){
+        foo <- lfcShrink(dds, type = "apeglm", coef = coefname, apeAdapt = T, parallel = T, svalue = T)
+        foo %<>% as.data.frame()
+        bar <- results(dds, name = coefname) %>% as.data.frame() %>% dplyr::select(pvalue)
+        foo <- bind_cols(foo, bar)
+      }
+      
+      if(method == "ape.noadapt"){
+        foo <- lfcShrink(dds, type = "apeglm", coef = coefname, apeAdapt = F, parallel = T)
+      }
+      
+      foo %<>%
+        as.data.frame %>%
+        rownames_to_column("ensembl_gene_id") %>%
+        left_join(ensembltohgnc) %>%
+        mutate(fdr = ihw(pvalue ~ baseMean,  data = ., alpha = 0.1) %>% adj_pvalues())
+      assign(x=resultname, value= foo, envir = .GlobalEnv)
+      if(writefiles){write_csv(foo, file = paste("./deseq/", resultname, ".deseq.csv", sep = ""))}
+      if(checkgsea){gsea(foo, bulkoutput = resultname)}
+    }
+    setwd("..") #End contrast specific results
+  }
+  setwd("..") #Return to main directory
+}
+
+
+splitIPAlist <- function(ipalist, outputfolder = NULL) {
+  expname <- deparse(substitute(ipalist)) %>% str_remove(".ipa")
+  assign(x= paste(expname, ".canonical", sep = "") , value = ipalist$`Canonical Pathways` %>% dplyr::rename(ipapathway = `Ingenuity Canonical Pathways`, zscore = zScore)    , envir = .GlobalEnv)
+  assign(x= paste(expname, ".upstream", sep = "") , value = ipalist$`Upstream Regulators` %>%dplyr::rename(upstream = `Upstream Regulator`, zscore = `Activation z-score`, regtype = `Molecule Type`), envir = .GlobalEnv)
+  assign(x= paste(expname, ".networks", sep = "") , value = ipalist$`Causal Networks` %>% dplyr::rename(upstream = "Master Regulator", regtype = "Molecule Type", zscore = "Activation z-score") , envir = .GlobalEnv)
+  assign(x= paste(expname, ".functions", sep = "") , value = ipalist$`Diseases and Bio Functions` %>% dplyr::rename(funtype = "Functions", functions = "Diseases or Functions Annotation", zscore = "Activation z-score") , envir = .GlobalEnv)
+  
+  if(!is.null(outputfolder)){
+    outputpath = paste(expname, sep = "")
+    paste(expname, ".canonical", sep = "") %>% get %>% write_csv(file = paste(outputfolder,expname, ".canonical", sep = "") )
+    paste(expname, ".upstream", sep = "") %>% get %>% write_csv(file = paste(outputfolder,expname, ".upstream", sep = "") )
+    paste(expname, ".networks", sep = "") %>% get %>% write_csv(file = paste(outputfolder,expname, ".networks", sep = "") )
+  }
+}
+
+
+makeVolcano <- function(deseq.res, col.up = "red", col.down = "blue", gene.labels = NULL, n.labels = 10,
+                        fcCutoff = 0.5, 
+                        fdrCutoff = 0.1){
+  
+  
+  if(is.null(gene.labels)){
+    gene.labels <- deseq.res %>%
+      arrange(pvalue) %>%
+      filter(abs(log2FoldChange) > 0.5, fdr < 0.1, !is.na(hgnc_symbol)) %>%
+      group_by(sign(log2FoldChange)) %>%
+      filter(row_number() <= n.labels) %>%
+      pull(hgnc_symbol)
+  }
+  
+  deseq.res %>%
+    mutate(
+      sig.color = 
+        case_when(
+          fdr < fdrCutoff & log2FoldChange > fcCutoff ~ col.up, 
+          fdr < fdrCutoff & log2FoldChange < -fcCutoff ~ col.down,
+          TRUE ~ "gray75"
+        ),
+      sig.alpha = 
+        case_when(
+          fdr < fdrCutoff & log2FoldChange > fcCutoff ~ 1, 
+          fdr < fdrCutoff & log2FoldChange < -fcCutoff ~ 1,
+          TRUE ~ 0.65
+        ), 
+      labels =
+        case_when(hgnc_symbol %in% gene.labels ~ hgnc_symbol)
+    ) %>%
+    ggplot(aes(x = log2FoldChange, y = -log(pvalue, 10), color = sig.color, alpha = sig.alpha)) + 
+    geom_point() + 
+    geom_text_repel(aes(label = labels, color = "black")) + 
+    scale_color_identity() +
+    scale_alpha_identity() +
+    theme_classic() + 
+    theme(aspect.ratio = 1, legend.position =  "none", 
+          axis.line = element_line(size = 1), 
+          axis.text = element_text(size = 16), 
+          axis.title = element_text(size = 16), 
+          panel.grid.major = element_line(linetype = "dotted", color = "grey85", size = 0.5)) + 
+    scale_y_continuous(oob = squish, limits = c(0,10)) + 
+    scale_x_continuous(oob = squish, limits = c(-4, 4)) + 
+    xlab("Log2 fold difference") +
+    labs(x=expression(log[2]~fold~difference), 
+         y=expression(-log[10]~p~value))
+  
+}
+
+
+gsea <- function(deseq.res, #A DESeq result object
+                 gmtfile ="~/Research/data/shared/c2.cp.reactome.v7.1.symbols.gmt", #A GMT file containing gene signatures of interest. These can be downloaded from MSigDB
+                 collapseCutoff = 0.1, 
+                 collapse = FALSE,#Collapse similar pathways
+                 rankstat = "l2f", 
+                 nPerm = 10000, 
+                 minSize = 25
+){
+  stopifnot(rankstat %in% c("stat", "l2f"))
+  
+  if(rankstat == "stat"){
+    cat("Ranking genes by Wald statistic...\n")
+    ranks <- deseq.res %>%
+      as.data.frame %>%
+      # rownames_to_column("ensembl_gene_id") %>%
+      # left_join(ensembltohgnc) %>%
+      dplyr::select(stat, hgnc_symbol) %>%
+      na.omit() %>% 
+      distinct() %>% 
+      group_by(hgnc_symbol) %>% 
+      summarize(stat=mean(stat)) %>% 
+      arrange(desc(stat)) %>%
+      deframe()
+  }
+  
+  if(rankstat == "l2f"){
+    cat("Ranking genes by log2-fold change...\n")
+    ranks <- deseq.res %>%
+      as.data.frame %>%
+      # rownames_to_column("ensembl_gene_id") %>%
+      # left_join(ensembltohgnc) %>%
+      dplyr::select(log2FoldChange, hgnc_symbol) %>%
+      na.omit() %>% 
+      distinct() %>% 
+      group_by(hgnc_symbol) %>% 
+      summarize(log2FoldChange=mean(log2FoldChange)) %>% 
+      arrange(desc(log2FoldChange)) %>%
+      deframe()
+  }
+  
+  pathways <<- gmtPathways(gmtfile)
+  
+  cat("Running fgsea...\n")
+  fgseaRes <- fgseaMultilevel(pathways=pathways, stats=ranks,eps = 0, nPermSimple = nPerm, minSize = minSize)
+  
+  if(collapse == TRUE){
+    cat("Collapsing pathways...\n")
+    collapsedPathways <- collapsePathways(fgseaRes[order(pval)][padj < collapseCutoff], 
+                                          pathways, ranks)
+    
+    fgseaRes <- fgseaRes[pathway %in% collapsedPathways$mainPathways]
+  }
+  
+  return(fgseaRes)
+  
+}
+
+#This function takes a GSEA table and returns a GGPlot object
+#padjCutoff - padj value for the GSEA
+gsea_plot <- function(gsealist, padjCutoff = 0.1, topNpathways = 20) {
+  
+  gsealist %>%
+    mutate(pathway = str_replace_all(string = pathway, pattern = "_", replacement = " ")) %>%
+    mutate(pathway = str_remove(pathway, "GO ")) %>%
+    mutate(pathway = str_remove(pathway, "HALLMARK ")) %>%
+    mutate(pathway = str_remove(pathway, "KEGG "))%>%
+    mutate(pathway = str_remove(pathway, "REACTOME "))%>%
+    mutate(absNES = abs(NES)) %>%
+    mutate(direction = case_when(
+      NES > 0 ~ "Upregulated", 
+      NES < 0 ~ "Downregulated"
+    )) %>%
+    arrange(desc(NES)) %>% 
+    group_by(direction) %>%
+    arrange(desc(absNES), .by_group = TRUE) %>%
+    mutate(rank = row_number()) %>% 
+    ungroup %>%
+    filter(padj <= padjCutoff) %>%
+    filter(rank <= topNpathways) %>%
+    ggplot(aes(x=reorder(pathway, -absNES), y = NES, fill = padj)) + geom_bar(stat = "identity") + coord_flip() + facet_wrap(~direction, scale = "free") + scale_x_discrete(labels = label_wrap(20)) + theme_classic() + theme(axis.text = element_text(face = "bold")) + ylab("Net enrichment score") + xlab("Pathway") 
+}
+
+#This function takes the name of a folder ("experiment") and allows the user to select one the files in the gsea subfolder. The result can be either chosen at a prompt or can be entered as an argument ("resultlist"). The function returns a tibble that can be passed as an argument to the above plotting function or can be used for further analyses
+gsea_results <- function(experiment, resultlist = 0){
+  gseafolder <- paste("./", experiment, "/gsea", sep = "")
+  setwd(gseafolder)
+  gsea_all <- dir()
+  
+  if(length(gsea_all) == 0){
+    print("No files are available to review.")
+    setwd("..")
+    setwd("..")
+    return(NULL)
+  }
+  
+  listnum <- resultlist
+  if(resultlist == 0){
+    print(gsea_all)
+    listnum <- readline("Please select a GSEA list: ") %>% as.numeric
+    ifelse(
+      listnum %in% seq(from = 1, to = length(gsea_all), by = 1),
+      {
+        foo <- fread(file = gsea_all[listnum])
+        setwd("..")
+        setwd("..")
+        return(foo) 
+      }, 
+      {
+        setwd("..")
+        setwd("..")
+        print("Please select a valid list")
+        return(NULL)
+      }
+    )
+    
+    
+  }
+  
+  if(resultlist != 0){
+    ifelse(
+      listnum %in% seq(from = 1, to = length(gsea_all), by = 1),
+      {
+        foo <- fread(gsea_all[listnum])
+        setwd("..")
+        setwd("..")
+        return(foo) 
+      }, 
+      {
+        setwd("..")
+        setwd("..")
+        print("Please select a valid list")
+        return(NULL)
+      }
+    )
+  }
+}
+
+#Can use this for make color scales for heatmaps
+quantile_breaks <- function(xs, n = 10) {
+  breaks <- quantile(xs, probs = seq(0, 1, length.out = n))
+  breaks[!duplicated(breaks)]
+}
+
+
+
+#  Imported from https://github.com/jmw86069/multienrichjam/blob/master/R/jamenrich-import.R
+#' Import Ingenuity IPA enrichment results
+#'
+#' Import Ingenuity IPA enrichment results
+#'
+#' This function parses Ingenuity IPA enrichment data into
+#' a form usable as a list of  enrichment `data.frame`
+#' objects for downstream analysis. Each `data.frame`
+#' will represent the results of one Ingenuity IPA
+#' enrichment test.
+#'
+#' The input data can be one of four forms:
+#'
+#' 1. `ipaFile` can be a text `.txt` file,
+#' where the text file contains all IPA enrichment data in
+#' tall format. This format is most common.
+#' 2. `ipaFile` can be an Excel `.xlsx` file,
+#' which contains all IPA enrichment data in
+#' one tall worksheet tab.
+#' 3. `ipaFile` can be an Excel `.xlsx` file,
+#' where each type of IPA enrichment appears on a separate
+#' Excel worksheet tab.
+#' 4. `ipaFile` can be a list of `data.frame` objects.
+#' This option is intended when the IPA data has already
+#' been imported into R as separate `data.frame` objects.
+#'
+#' The basic motivation for this function is two-fold:
+#'
+#' 1. Separate multiple IPA enrichment tables.
+#' 2. Rename colnames to be consistent.
+#'
+#' When using `"Export All"` from IPA, the default text format
+#' includes multiple enrichment tables concatenated together in one
+#' file. Each enrichment table contains its own unique column
+#' headers, with descriptive text in the line preceding the
+#' column headers. This function is intended to separate the
+#' enrichment tables into a list of `data.frame` objects, and
+#' retain the descriptive text as names of the list.
+#'
+#' @return list of `data.frame` objects, where each `data.frame`
+#'    contains enrichment data for one of the Ingenuity IPA
+#'    enrichment tests.
+#'
+#' @family jam import functions
+#'
+#' @param ipaFile one of the four input types described above:
+#'    a character vector of text file names; a character vector of
+#'    Excel `.xlsx` file names; a list of `data.frame` objects.
+#' @param headerGrep regular expression pattern used to
+#'    recognize header columns found in Ingenuity IPA enrichment data.
+#' @param ipaNameGrep vector of regular expression patterns
+#'    used to recognize the name of the enriched entity,
+#'    for example the biological pathway, or network, or
+#'    disease category, etc.
+#' @param geneGrep regular expression pattern used to recognize
+#'    the column containing genes, or the molecules tested for
+#'    enrichment which were found in the enriched entity.
+#' @param geneCurateFrom,geneCurateTo vector of patterns and
+#'    replacements, respectively, used to curate values in
+#'    the gene column. These replacement rules are used to
+#'    ensure that genes are delimited consistently, with no
+#'    leading or trailing delimiters.
+#' @param method integer value indicating the method used to
+#'    import data from a text file, where: `method=1` uses
+#'    `data.table::read.table()` and the `textConnection` argument;
+#'    `method=2` uses `readr::read_tsv()`. The motivation to use
+#'    `data.table::read.table()` is it performed better in the
+#'    presence of UTF-8 characters such as the alpha symbol.
+#' @param sheet integer value used only when `ipaFile` is
+#'    a vector of Excel `.xlsx` files, and when the Excel
+#'    format includes multiple worksheets. This value will
+#'    extract enrichment data only from one worksheet from
+#'    each Excel file.
+#' @param sep character string used when `ipaFile` is a vector
+#'    of text files, to split fields into columns. The default
+#'    will split fields by the tab character.
+#' @param xlsxMultiSheet logical indicating whether input
+#'    Excel `.xlsx` files contain multiple worksheets.
+#' @param useXlsxSheetNames logicl indicating whether to use the
+#'    Excel worksheet name for each imported enrichment table,
+#'    when importing from `.xlsx` files, and when
+#'    `xlsxMultiSheet=FALSE`. When `xlsxMultiSheet=TRUE` the
+#'    name is derived from the value matched using `ipaNameGrep`,
+#'    because in this case, there are expected to me multiple
+#'    enrichment tables in one worksheet.
+#' @param verbose logical indicating whether to print verbose output.
+#' @param ... additional arguments are ignored.
+#'
+#' @export
+#' 
+importIPAenrichment <- function (ipaFile,
+ headerGrep="(^|\t)((expr.|-log.|)p-value|Pvalue|Score\t|Symbol\t|Ratio\t|Consistency.Score|Master.Regulator\t)",
+ ipaNameGrep=c("Pathway", "Regulator$", "Regulators", "Regulator", #"Master.Regulator",
+               "Disease", "Toxicity",
+               "Category", "Categories",
+               "Function", "Symbol$",
+               "^ID$", "My.(Lists|Pathways)"),
+ geneGrep=c("Molecules in Network", "Molecules"),
+ geneCurateFrom=c(" [(](complex|includes others)[)]",
+                  "^[,]+|[,]+$"),
+ geneCurateTo=c("",
+                ""),
+ method=1,
+ sheet=1,
+ sep="\t",
+ xlsxMultiSheet=TRUE,
+ useXlsxSheetNames=FALSE,
+ verbose=FALSE,
+ ...)
+{
+  ## Purpose is to encapsulate several steps required to import the
+  ## IPA Ingenuity Pathway Analysis file created with "Export All."
+  
+  ## Import the data, only taking rows containing tab-delimited
+  ## columns.
+  ## Note: this step preserved UTF-8 characters, since IPA often
+  ## encodes symbols like alpha and beta as the proper UTF-8
+  ## character.
+  ##
+  ## xlsxMultiSheet=TRUE is intended for Excel import where the Excel file
+  ## contains separate worksheets, each with its own properly defined
+  ## summary table.
+  ##
+  ## xlsxMultiSheet=FALSE is intended for Excel import of IPA data where
+  ## the Excel table contains all summary tables appended one after another.
+  if (jamba::igrepHas("[.]xlsx$", ipaFile)) {
+    if (suppressPackageStartupMessages(!require(openxlsx))) {
+      stop("importIPAenrichment() requires the openxlsx package for Excel import.");
+    }
+  }
+  if (suppressPackageStartupMessages(!require(jamba))) {
+    stop("importIPAenrichment() requires the jamba package, devtools::install_github('jmw86069/jamba')");
+  }
+  
+  if (jamba::igrepHas("list", class(ipaFile)) &&
+      jamba::igrepHas("data.frame|tibbletbl|matrix|dataframe", class(ipaFile[[1]]))) {
+    ## Process list of data.frames as input
+    ipaDFL <- lapply(jamba::nameVectorN(ipaFile), function(iSheet){
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "from data.frame list name:", iSheet);
+      }
+      iDF <- ipaFile[[iSheet]];
+      jDF <- curateIPAcolnames(iDF,
+                               ipaNameGrep=ipaNameGrep,
+                               geneGrep=geneGrep,
+                               geneCurateFrom=geneCurateFrom,
+                               geneCurateTo=geneCurateTo,
+                               verbose=verbose);
+      jDF;
+    });
+  } else if (jamba::igrepHas("[.]xlsx$", ipaFile) && length(ipaFile) > 1) {
+    ## Process multiple files by calling this function on each file
+    ipaDFLL <- lapply(ipaFile, function(ipaFile_i){
+      jDF <- importIPAenrichment(ipaFile=ipaFile_i,
+                                 headerGrep=headerGrep,
+                                 ipaNameGrep=ipaNameGrep,
+                                 geneGrep=geneGrep,
+                                 geneCurateFrom=geneCurateFrom,
+                                 geneCurateTo=geneCurateTo,
+                                 method=method,
+                                 sheet=sheet,
+                                 sep=sep,
+                                 xlsxMultiSheet=xlsxMultiSheet,
+                                 verbose=verbose,
+                                 ...);
+    });
+    return(ipaDFLL);
+  } else if (jamba::igrepHas("[.]xlsx$", ipaFile) && xlsxMultiSheet) {
+    ## Import IPA data from Excel xlsx file, multiple worksheets
+    ## Process Excel import instead of CSV
+    sheetNames <- openxlsx::getSheetNames(ipaFile);
+    sheetNamesUse <- jamba::nameVector(sheet, sheetNames[sheet]);
+    if (verbose) {
+      jamba::printDebug("importIPAenrichment(): ",
+                        "importing xlsx as from multiple worksheets:",
+                        ipaFile);
+      jamba::printDebug("importIPAenrichment(): ",
+                        "sheetNamesUse:");
+      print(sheetNamesUse);
+    }
+    ipaDFL <- lapply(sheetNamesUse, function(iSheet){
+      if (verbose) {
+        jamba::printDebug("   importIPAenrichment(): ",
+                          "iSheet:", iSheet);
+      }
+      if (1 == 2) {
+        iDF <- read.xlsx(xlsxFile=ipaFile,
+                         sheet=iSheet);
+        jDF <- curateIPAcolnames(iDF,
+                                 ipaNameGrep=ipaNameGrep,
+                                 geneGrep=geneGrep,
+                                 geneCurateFrom=geneCurateFrom,
+                                 geneCurateTo=geneCurateTo,
+                                 verbose=verbose);
+        jDF;
+      } else {
+        jDF <- importIPAenrichment(ipaFile=ipaFile,
+                                   headerGrep=headerGrep,
+                                   ipaNameGrep=ipaNameGrep,
+                                   geneGrep=geneGrep,
+                                   geneCurateFrom=geneCurateFrom,
+                                   geneCurateTo=geneCurateTo,
+                                   method=method,
+                                   sheet=sheet,
+                                   sep=sep,
+                                   xlsxMultiSheet=FALSE,
+                                   verbose=verbose,
+                                   ...);
+      }
+    });
+    ipaDFL <- unlist(recursive=FALSE, unname(ipaDFL));
+  } else {
+    ## Import IPA data from Excel xlsx or txt file, single worksheet
+    if (jamba::igrepHas("[.]xlsx$", ipaFile) && !xlsxMultiSheet) {
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "importing xlsx as a single worksheet:",
+                          ipaFile);
+      }
+      iDF <- openxlsx::read.xlsx(ipaFile,
+                                 sheet=1,
+                                 colNames=FALSE);
+      i <- gsub("\t+$",
+                "",
+                jamba::pasteByRow(iDF,
+                                  sep="\t",
+                                  condenseBlanks=FALSE));
+      #i <- jamba::vigrep("\t.*\t", i);
+    } else {
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "importing text using grep from ipaFile:",
+                          ipaFile);
+      }
+      #i <- system(intern=TRUE,
+      #      paste0("grep '\t.*\t' ", ipaFile));
+      i <- jamba::vigrep(".", readLines(ipaFile));
+      #i <- system(intern=TRUE,
+      #   paste0("grep '.*' ", ipaFile));
+      ## Clean up trailing newlines
+      i <- gsub("[\r\n]+$",
+                "",
+                i);
+      #i;
+    }
+    ## Often IPA output has descriptor lines with 'for ... ->' in them
+    ## which indicates a header for each subtable. We will parse
+    ## that header for their correct table name where possible.
+    is_desc <- grep("( for ).*(->)", i);
+    
+    ## Infer which columns area headers, then set up
+    ## ranges of rows to be assigned to each header.
+    #i1 <- jamba::igrep(headerGrep, i);
+    is_header <- jamba::igrep(headerGrep, i);
+    is_footer <- c(tail(is_header, -1) - 2, length(i));
+    
+    ## Note that a "valid" condition must have
+    ## - descLines one row above i1
+    ## - i1 must be contained in (descLines + 1)
+    ## - descLines must not be contained in (descLines + 2)
+    valid_desc <- ((is_desc + 1) %in% is_header & !(is_desc + 2) %in% is_desc);
+    i_desc <- gsub("( for |->).*$", "", i[is_desc]);
+    valid_df <- data.frame(is_desc,
+                           is_header=is_header[match(is_desc, is_header - 1)],
+                           is_footer=is_footer[match(is_desc, is_header - 1)],
+                           i_desc,
+                           valid_desc);
+    rownames(valid_df) <- jamba::makeNames(i_desc);
+    use_df <- valid_df[valid_desc,,drop=FALSE];
+    if (verbose) {
+      jamba::printDebug("importIPAenrichment(): ",
+                        "summary of IPA row validation:");
+      print(valid_df);
+      jamba::printDebug("importIPAenrichment(): ",
+                        "Rows used during import:");
+      print(use_df);
+    }
+    
+    
+    ## Iterate each set of results and create a data.frame.
+    ## Note that each type of result has its own number of columns,
+    ## and unique colnames.
+    ipaDFL <- lapply(jamba::nameVector(rownames(use_df)), function(j){
+      j1 <- use_df[j,"is_header"];
+      j2 <- use_df[j,"is_footer"];
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "creating data.frame:",
+                          j,
+                          ", j1:", j1, ", j2:", j2);
+      }
+      ## Create a sequence that removes the descLines as relevant
+      jseq <- seq(from=j1, to=j2, by=1);
+      if (any(jseq %in% is_desc)) {
+        j2 <- min(intersect(jseq, is_desc)) - 1;
+        jseq <- seq(from=j1, to=j2, by=1);
+      }
+      ## Note it is very important to use textConnection() here
+      ## because it properly preserves character encodings, such
+      ## as alpha, beta characters in some pathway names from IPA.
+      if (method == 1) {
+        if (verbose) {
+          jamba::printDebug("importIPAenrichment(): ",
+                            "using read.table().");
+        }
+        jDF <- read.table(
+          textConnection(gsub(paste0(sep, "+$"),
+                              "",
+                              i[jseq])),
+          sep=sep,
+          stringsAsFactors=FALSE,
+          quote="\"",
+          check.names=FALSE,
+          as.is=TRUE,
+          header=TRUE,
+          encoding="UTF-8",
+          comment.char="",
+          fill=TRUE);
+      } else {
+        if (suppressPackageStartupMessages(!require(readr))) {
+          stop("importIPAenrichment() requires the readr package.");
+        }
+        if (verbose) {
+          jamba::printDebug("importIPAenrichment(): ",
+                            "using readr::read_tsv().");
+        }
+        jDF <- readr::read_tsv(
+          #paste0(gsub("\t$", "", i[j1:j2]),
+          paste0(gsub(paste0(sep, "+$"),
+                      "",
+                      i[jseq]),
+                 collapse="\n"),
+          quote="\"",
+          col_names=TRUE,
+          #encoding="UTF-8",
+          comment="");
+      }
+      ## Remove empty colnames
+      non_na_cols <- sapply(colnames(jDF), function(j){
+        !all(jDF[[j]] %in% c(NA, ""))
+      });
+      jDF <- jDF[,non_na_cols,drop=FALSE];
+      
+      ## Curate IPA colnames
+      jDF <- curateIPAcolnames(jDF,
+                               ipaNameGrep=ipaNameGrep,
+                               geneGrep=geneGrep,
+                               geneCurateFrom=geneCurateFrom,
+                               geneCurateTo=geneCurateTo,
+                               verbose=verbose);
+      jDF;
+    });
+  }
+  ## Return list of data.frames
+  ipaDFL;
+}
+
+#' Curate Ingenuity IPA colnames
+#'
+#' Curate Ingenuity IPA colnames
+#'
+#' This function is intended to help curate colnames observed
+#' in Ingenuity IPA enrichment data. The IPA enrichment data
+#' includes multiple types of enrichment tests, each with slightly
+#' different column headers. This function is intended to
+#' make the colnames more consistent.
+#'
+#' This function will rename the first recognized gene colname
+#' to `"geneNames"` for consistency with downstream analyses.
+#'
+#' The values in the recognized gene colname are curated
+#' using `geneCurateFrom,geneCurateTo` for multiple
+#' pattern-replacement substitutions. This mechanism is
+#' used to ensure consistent delimiters and values used
+#' for each enrichment table.
+#'
+#' Any colname matching `"-log.*p.value"` is considered
+#' -log10 P-value, and is converted to normal P-values
+#' for consistency with downstream analyses.
+#'
+#' Any recognized P-value column is renamed to `"P-value"`
+#' for consistency with downstream analyses.
+#'
+#' When the recognized P-value column contains a range,
+#' for example `"0.00017-0.0023"`, the lower P-value is
+#' chosen. In that case, the higher P-value is stored in
+#' a new column `"max P-value"`. P-value ranges
+#' are reported in the disease category analysis by
+#' Ingenuity IPA, after collating individual pathways
+#' by disease category and storing the range of enrichment
+#' P-values.
+#'
+#' @family jam import functions
+#'
+#' @param jDF data.frame from one Ingenuity IPA enrichment test.
+#' @param ipaNameGrep vector of regular expression patterns
+#'    used to recognize the name of the enriched entity,
+#'    for example the biological pathway, or network, or
+#'    disease category, etc.
+#' @param geneGrep regular expression pattern used to recognize
+#'    the column containing genes, or the molecules tested for
+#'    enrichment which were found in the enriched entity.
+#' @param geneCurateFrom,geneCurateTo vector of patterns and
+#'    replacements, respectively, used to curate values in
+#'    the gene column. These replacement rules are used to
+#'    ensure that genes are delimited consistently, with no
+#'    leading or trailing delimiters.
+#' @param verbose logical indicating whether to print verbose output.
+#' @param ... additional arguments are ignored.
+#'
+#' @export
+curateIPAcolnames <- function(jDF,
+ ipaNameGrep=c("^Name$",
+               "^ID$",
+               "Canonical Pathways",
+               "Upstream Regulator",
+               "Diseases or Functions Annotation",
+               "Diseases . Functions",
+               "My Lists",
+               "Ingenuity Toxicity Lists",
+               "My Pathways"),
+ geneGrep=c("Molecules in Network",
+            "Target molecules",
+            "Molecules"),
+ geneCurateFrom=c(" [(](complex|includes others)[)]",
+                  "^[,]+|[,]+$"),
+ geneCurateTo=c("",
+                ""),
+ verbose=TRUE,
+ ...)
+{
+  ## Purpose is to curate some colnames in IPA enrichment data
+  ## Determine a column to become the "Name"
+  if (suppressPackageStartupMessages(!require(jamba))) {
+    stop("curateIPAcolnames() requires the jamba package.");
+  }
+  nameCol <- head(jamba::provigrep(ipaNameGrep, colnames(jDF)), 1);
+  if (length(nameCol) == 1) {
+    jDF[["Name"]] <- jDF[[nameCol]];
+    ## Skip rename, in order to maintain the original colname
+    #jDF <- jamba::renameColumn(jDF,
+    #   from=nameCol,
+    #   to="Name");
+    if (verbose) {
+      jamba::printDebug("importIPAenrichment(): ",
+                        "created Name column from:",
+                        nameCol);
+    }
+  }
+  
+  ## Determine which column contains the genes of interest
+  geneCol <- head(jamba::provigrep(geneGrep, colnames(jDF)), 1);
+  if (length(geneCol) == 1) {
+    jDF <- jamba::renameColumn(jDF,
+                               from=geneCol,
+                               to="geneNames");
+    if (verbose) {
+      jamba::printDebug("importIPAenrichment(): ",
+                        "created ", "'geneNames'", " column from:",
+                        geneCol);
+    }
+    ## Curate gene column values
+    jDF[["geneNames"]] <- gsubs(geneCurateFrom,
+                                geneCurateTo,
+                                jDF[["geneNames"]]);
+  }
+  
+  ## Convert -log(p-value) columns to P-value for compatibility
+  ## with the enrichResult object class.
+  logpCol <- head(jamba::vigrep("-log.*p.value", colnames(jDF)), 1);
+  if (length(logpCol) == 1) {
+    if ("p-value" %in% tolower(colnames(jDF))) {
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "Used existing P-value column, left existing column as-is:",
+                          logpCol);
+        #print(head(jDF[,c("P-value",logpCol),drop=FALSE]));
+      }
+    } else {
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "Created P-value column from:",
+                          logpCol);
+        #print(head(jDF[,logpCol,drop=FALSE]));
+      }
+      jDF[["P-value"]] <- 10^(-as.numeric(jDF[[logpCol]]));
+    }
+  }
+  pCol <- head(setdiff(jamba::vigrep("^p.value", colnames(jDF)), "P-value"), 1);
+  if (length(pCol) == 1) {
+    if (length(logpCol) != 1) {
+      jDF <- jamba::renameColumn(jDF,
+                                 from=pCol,
+                                 to="P-value");
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "Renamed P-value column from:",
+                          pCol);
+      }
+    } else {
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "Did not rename P-value column from:",
+                          pCol);
+      }
+    }
+    ## Check for multiple P-values
+    if (jamba::igrepHas("-[0-9]+-", head(jDF[["P-value"]], 20))) {
+      if (verbose) {
+        jamba::printDebug("importIPAenrichment(): ",
+                          "Splitting P-value range");
+      }
+      pvals <- gsub("([0-9]+)-([0-9]+)",
+                    "\\1!\\2",
+                    jDF[["P-value"]]);
+      pvalsM1 <- jamba::rbindList(strsplit(pvals, "!"));
+      pvalsM <- matrix(as.numeric(pvalsM1),
+                       ncol=ncol(pvalsM1));
+      maxPcolnames <- jamba::makeNames(rep("max P-value", ncol(pvalsM)-1));
+      colnames(pvalsM) <- c("P-value", maxPcolnames);
+      jDF[,colnames(pvalsM)] <- pvalsM;
+    }
+  }
+  return(jDF);
+}
+
+#' Pattern replacement with multiple patterns
+#'
+#' Pattern replacement with multiple patterns
+#'
+#' This function is a simple wrapper around `base::gsub()`
+#' when considering a series of pattern-replacement
+#' combinations. It applies each pattern match and replacement
+#' in order and is therefore not vectorized.
+#'
+#' @family jam utility functions
+#'
+#' @param pattern character vector of patterns
+#' @param replacement character vector of replacements
+#' @param x character vector with input data to be curated
+#' @param ignore.case logical indicating whether to perform
+#'    pattern matching in case-insensitive manner, where
+#'    `ignore.case=TRUE` will ignore the uppercase/lowercase
+#'    distinction.
+#' @param replace_multiple logical vector indicating whether to perform
+#'    global substitution, where `replace_multiple=FALSE` will
+#'    only replace the first occurrence of the pattern, using
+#'    `base::sub()`. Note that this vector can refer to individual
+#'    entries in `pattern`.
+#' @param ... additional arguments are passed to `base::gsub()`
+#'    or `base::sub()`.
+#'
+#' @export
+gsubs <- function (pattern,
+ replacement,
+ x,
+ ignore.case=TRUE,
+ replaceMultiple=rep(TRUE, length(pattern)),
+ ...)
+{
+  ## Purpose is to curate a text field using a series of gsub()
+  ## commands, operating on a vector of from,to vectors.
+  ## 'pattern' is expected to be a vector of regular expression patterns
+  ## used by gsub()
+  ##
+  ## 'replacement' is expected to be a vector of replacement patterns, as
+  ## used by gsub(), including relevant regular expression operators.
+  ## If 'replacement' is empty, the "" is used, thereby replacing patterns with
+  ## empty characters.
+  ##
+  ## replace_multiple is a logical vector indicating whether each pattern
+  ## replacement should use gsub() if replaceMultiple==TRUE, or sub()
+  ## if replaceMultiple==FALSE. The default is TRUE, which uses gsub().
+  ## One would use replaceMultiple=FALSE in order to replace only the
+  ## first occurrence of a pattern, like replacing the first tab character
+  ## only.
+  ##
+  ## This function allows the patterns and replacements to be defined
+  ## upfront, then applied to any relevant character vectors consistently,
+  ## for example across columns of a data.frame.
+  if (length(x) == 0 || length(pattern) == 0) {
+    return(x);
+  }
+  if (length(replaceMultiple) == 0) {
+    replaceMultiple <- TRUE;
+  }
+  replaceMultiple <- rep(replaceMultiple, length.out=length(pattern));
+  if (length(replacement) == 0) {
+    replacement <- "";
+  }
+  replacement <- rep(replacement, length.out=length(pattern));
+  for (i in seq_along(pattern)) {
+    if (replaceMultiple[[i]]) {
+      x <- gsub(pattern=pattern[i],
+                replacement=replacement[i],
+                x=x,
+                ignore.case=ignore.case,
+                ...);
+    } else {
+      x <- sub(pattern=pattern[i],
+               replacement=replacement[i],
+               x=x,
+               ignore.case=ignore.case,
+               ...);
+    }
+  }
+  return(x);
+}
+
+#' Find colname by character string or pattern matching
+#'
+#' Find colname by character string or pattern matching
+#'
+#' This function is intended to help find a colname given
+#' a character vector of expected values or regular expression
+#' patterns. By default it returns the first matching value,
+#' but can return multiple if `max=Inf`.
+#'
+#' If there are no `colnames(x)` then `NULL` is returned.
+#'
+#' The order of operations:
+#'
+#' 1. Match exact string.
+#' 2. Match exact string in case-insensitive manner.
+#' 3. Match the start of each string using `jamba::provigrep()`.
+#' 4. Match the end of each string using `jamba::provigrep()`.
+#' 5. Match each string using `jamba::provigrep()`.
+#'
+#' The results from the first successful operation is returned.
+#'
+#' When there are duplicate `colnames(x)` only the first
+#' unique name is returned.
+#'
+#' @family jam utility functions
+#'
+#' @return character vector with length `max`, or if no pattern
+#'    match is found it returns `NULL`. Also if there are no
+#'    `colnames(x)` then it returns `NULL`.
+#'
+#' @param pattern character vector containing text strings or
+#'    regular expression patterns.
+#' @param x input `data.frame` or other R object that
+#'    contains colnames.
+#' @param max integer maximum number of results to return.
+#' @param index logical indicating whether to return the column
+#'    index as an integer vector. When `index=FALSE` it returns
+#'    the matching `colnames(x)`; when `index=TRUE` it returns
+#'    the matching column numbers as an integer vector.
+#' @param require_non_na logical indicating whether to require the
+#'    column to contain non-NA values, default is TRUE. The intent
+#'    of this function is to find colnames whose data will match
+#'    expectations, and when require_non_na is TRUE, this
+#'    function will continue until it finds a column with non-NA
+#'    values.
+#' @param ... additional arguments are passed to `jamba::provigrep()`.
+#'
+#' @export
+find_colname <- function(pattern,
+ x,
+ max=1,
+ index=FALSE,
+ require_non_na=TRUE,
+ verbose=FALSE,
+ ...)
+{
+  ##
+  x_colnames <- colnames(x);
+  ## require_non_na
+  if (require_non_na) {
+    x_colnames <- x_colnames[sapply(x_colnames, function(icol){
+      any(!is.na(x[[icol]]))
+    })]
+  }
+  ## if no colnames remain, return NULL
+  if (length(x_colnames) == 0) {
+    return(x_colnames);
+  }
+  
+  start_pattern <- paste0("^", pattern);
+  end_pattern <- paste0(pattern, "$");
+  
+  if (any(pattern %in% x_colnames)) {
+    ## 1. max exact colname
+    if (verbose) {
+      jamba::printDebug("find_colname(): ",
+                        "Returning exact match.");
+    }
+    x_vals <- intersect(pattern, x_colnames);
+  } else if (any(tolower(pattern) %in% tolower(x_colnames))) {
+    ## 2. max exact colname
+    if (verbose) {
+      jamba::printDebug("find_colname(): ",
+                        "Returning exact case-insensitive match.");
+    }
+    x_match <- jamba::rmNA(match(tolower(pattern), tolower(x_colnames)));
+    x_vals <- x_colnames[x_match];
+    return(head(x_vals, max));
+  } else if (jamba::igrepHas(paste(collapse="|", start_pattern), x_colnames)) {
+    ## 3. match start of each colname
+    if (verbose) {
+      jamba::printDebug("find_colname(): ",
+                        "Returning match to colname start.");
+    }
+    x_vals <- unique(jamba::provigrep(start_pattern, x_colnames));
+    return(head(x_vals, max));
+  } else if (jamba::igrepHas(paste(collapse="|", end_pattern), x_colnames)) {
+    ## 4. match end of each colname
+    if (verbose) {
+      jamba::printDebug("find_colname(): ",
+                        "Returning match to colname end.");
+    }
+    x_vals <- unique(jamba::provigrep(end_pattern, x_colnames));
+    return(head(x_vals, max));
+  } else if (jamba::igrepHas(paste(collapse="|", pattern), x_colnames)) {
+    ## 5. match any part of each colname
+    if (verbose) {
+      jamba::printDebug("find_colname(): ",
+                        "Returning match to part of colname.");
+    }
+    x_vals <- unique(jamba::provigrep(pattern, x_colnames));
+    return(head(x_vals, max));
+  } else {
+    if (verbose) {
+      jamba::printDebug("find_colname(): ",
+                        "No match found.");
+    }
+    x_vals <- NULL;
+  }
+  if (index && length(x_vals) > 0) {
+    x_vals <- unique(match(x_vals, x_colnames));
+  }
+  return(head(x_vals, max));
+}
