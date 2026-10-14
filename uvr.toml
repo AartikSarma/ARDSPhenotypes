@@ -1,0 +1,65 @@
+[project]
+name = "ARDSPhenotypes"
+r_version = ">=4.5.0"
+
+[dependencies]
+Seurat = "*"
+dendsort = "*"
+ggrepel = "*"
+here = "*"
+lme4 = "*"
+lmerTest = "*"
+patchwork = "*"
+pbkrtest = "*"
+pheatmap = "*"
+readxl = "*"
+tidyverse = "*"
+viridis = "*"
+writexl = "*"
+
+[dependencies.BiocGenerics]
+bioc = true
+
+[dependencies.BiocParallel]
+bioc = true
+
+[dependencies.CellChat]
+git = "sqjin/CellChat"
+rev = "v1.5.0"
+
+[dependencies.ComplexHeatmap]
+bioc = true
+
+[dependencies.DESeq2]
+bioc = true
+
+[dependencies.GEOquery]
+bioc = true
+
+[dependencies.GSVA]
+bioc = true
+
+[dependencies.MAST]
+bioc = true
+
+[dependencies.SingleCellExperiment]
+bioc = true
+
+[dependencies.edgeR]
+bioc = true
+
+[dependencies.fgsea]
+bioc = true
+
+[dependencies.limma]
+bioc = true
+
+[dependencies.msigdbr]
+git = "igordot/msigdbr"
+rev = "v7.5.1"
+
+[dependencies.mygene]
+bioc = true
+
+[dependencies.variancePartition]
+bioc = true

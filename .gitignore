@@ -1,0 +1,11 @@
+data/
+.Rhistory
+/.uvr/library/
+/.uvr/activate*
+.vscode/
+/publisheddata/
+/oldscripts/
+/published_validation/
+/scripts/ajrccm_2025/ARDS Phenotypes - 8 - Validate against published supplementary data.R
+/scripts/ajrccm_2025/ARDS Phenotypes - Interim ages for review.R
+.DS_Store
