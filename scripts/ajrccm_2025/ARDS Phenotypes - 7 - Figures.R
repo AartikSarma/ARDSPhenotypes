@@ -3,27 +3,24 @@
 # Draws the transcriptomic figures of the AJRCCM 2025 paper:
 #   Figure 1A, 1B  volcano plots of bulk differential expression (Data E1)
 #   Figure 1C      heatmaps of the reproducible genes in each bulk cohort
-#   (unnumbered)   expression of the reproducible genes by cell type and
-#                  phenotype in the single-cell RNA-seq
-#   (unnumbered)   UMAPs of the single-cell RNA-seq showing the expression of
-#                  each reproducible gene up in HyperARDS (PNG, as the plot
-#                  holds about 26,000 points per panel)
-#   (unnumbered)   per-cell scores for those genes (all, ribosomal, other), by
-#                  phenotype: on the UMAP, over all cells and within each cell
-#                  type, and against each subject's T and NK cell fraction
 #   Figure 2A      HyperARDS signature GSVA scores by phenotype
 #   Figure 2B      Reactome pathways enriched in the same direction in both
 #                  bulk cohorts (a curated subset)
 #   Figure E2      GSVA scores, first COVID sample per subject
 #   Figure E3      the shared bulk pathways that are also enriched in at least
 #                  one single-cell type
+#   Ligand-receptor figures (script 6 results):
+#     the differential interaction network between phenotypes, and a chord
+#     diagram of the interactions up in each phenotype (Data E6)
 #
 # Phenotypes are coloured from the Okabe-Ito palette. Continuous values that
-# run from low to high use viridis palettes; values centred on zero (Figure E3
-# NES, scaled expression and the HyperARDS gene score) use diverging scales.
+# run from low to high use viridis palettes; Figure E3's NES, centred on zero,
+# uses a diverging scale between the phenotype colours. The ligand-receptor
+# figures keep the cell type colours of the published figures (CellChat's
+# default palette).
 # Heatmap dendrograms are ordered by dendsort.
 #
-# Run from the repository root after scripts 0, 3, 4 and 5. Writes PDFs to
+# Run from the repository root after scripts 0, 3, 4, 5 and 6. Writes PDFs to
 # data/results/ajrccm_2025/figures/.
 
 library(tidyverse)
@@ -34,7 +31,7 @@ library(dendsort)
 library(ggrepel)
 library(patchwork)
 library(viridis)
-library(SeuratObject)
+library(CellChat)
 
 clean_directory <- file.path(here::here(), "data", "geo", "clean")
 published_directory <- file.path(here::here(), "published_results")
@@ -152,242 +149,6 @@ for (cohort in names(cohort_titles)) {
   grid::grid.draw(heatmap$gtable)
   dev.off()
 }
-
-# Reproducible genes in the single-cell RNA-seq -----------------------------
-
-# For each gene, cell type and phenotype: the percentage of cells in which the
-# gene is detected (dot size) and its mean expression, log(1 + mean
-# normalized expression), standardized per gene across all cell type and
-# phenotype groups (colour, on a diverging blue-grey-red scale centred at the
-# gene's average; the phenotype colours are not used, so that colour is not
-# read as phenotype). Cell types with fewer than 100 cells are left out.
-# Genes are grouped by the phenotype in which they are up in bulk RNA-seq.
-scseq_seurat <- readRDS(file.path(clean_directory, "scseq_seurat.rds"))
-
-reproducible_gene_symbols <-
-  reproducible_genes %>%
-  distinct(gene_symbol, direction) %>%
-  filter(gene_symbol %in% rownames(scseq_seurat))
-
-# Cell types in order of abundance.
-cell_types_shown <-
-  scseq_seurat$topcells %>%
-  table() %>%
-  sort(decreasing = TRUE) %>%
-  { names(.)[. >= 100] } %>%
-  setdiff("Other")
-
-single_cell_expression <-
-  tibble(cell = colnames(scseq_seurat),
-         cell_type = scseq_seurat$topcells,
-         phenotype = scseq_seurat$phenotype) %>%
-  bind_cols(
-    LayerData(scseq_seurat, assay = "RNA", layer = "data")[reproducible_gene_symbols$gene_symbol, ] %>%
-      as.matrix() %>% t() %>% as_tibble()
-  ) %>%
-  filter(cell_type %in% cell_types_shown) %>%
-  pivot_longer(all_of(reproducible_gene_symbols$gene_symbol),
-               names_to = "gene_symbol", values_to = "expression") %>%
-  summarize(percent_detected = 100 * mean(expression > 0),
-            mean_expression = log1p(mean(expm1(expression))),
-            .by = c(gene_symbol, cell_type, phenotype)) %>%
-  mutate(scaled_expression = as.numeric(scale(mean_expression)), .by = gene_symbol) %>%
-  left_join(reproducible_gene_symbols, by = "gene_symbol") %>%
-  mutate(phenotype = factor(phenotype, levels = names(phenotype_labels)),
-         cell_type = factor(cell_type, levels = cell_types_shown),
-         direction = str_replace(direction, "Up in ", "Up in\n"))
-
-reproducible_gene_dot_plot <-
-  ggplot(single_cell_expression,
-         aes(phenotype, gene_symbol, size = percent_detected, colour = scaled_expression)) +
-  geom_point() +
-  facet_grid(direction ~ cell_type, scales = "free_y", space = "free_y",
-             labeller = labeller(cell_type = label_wrap_gen(12))) +
-  scale_colour_gradient2(name = "Scaled mean\nexpression", low = "#2166AC", mid = "grey85",
-                         high = "#B2182B", midpoint = 0,
-                         limits = c(-1, 1) * max(abs(single_cell_expression$scaled_expression))) +
-  scale_size_area(name = "% cells\ndetected", max_size = 5) +
-  scale_x_discrete(labels = c(HypoARDS = "Hypo", HyperARDS = "Hyper")) +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-        strip.background = element_blank(),
-        strip.text.y = element_text(angle = 0, hjust = 0),
-        panel.border = element_rect(fill = NA, linewidth = 1)) +
-  labs(x = "", y = "")
-
-ggsave(file.path(figure_directory, "Reproducible genes by cell type.pdf"),
-       reproducible_gene_dot_plot, width = 12.5, height = 5.5)
-
-# UMAPs of the genes up in HyperARDS. The first panel labels the cell types;
-# each other panel colours cells by the gene's log-normalized expression
-# relative to its 99th percentile among expressing cells (capped at 1), so
-# that weakly and strongly expressed genes are equally legible. Expressing
-# cells are drawn on top.
-umap_cells <-
-  Embeddings(scseq_seurat, "umap") %>%
-  as_tibble(rownames = "cell") %>%
-  dplyr::rename(umap_1 = 2, umap_2 = 3) %>%
-  mutate(cell_type = scseq_seurat$topcells[cell])
-
-hyperards_reproducible_genes <-
-  reproducible_gene_symbols %>%
-  filter(direction == "Up in HyperARDS") %>%
-  pull(gene_symbol) %>%
-  sort()
-
-umap_expression <-
-  umap_cells %>%
-  bind_cols(
-    LayerData(scseq_seurat, assay = "RNA", layer = "data")[hyperards_reproducible_genes, umap_cells$cell] %>%
-      as.matrix() %>% t() %>% as_tibble()
-  ) %>%
-  pivot_longer(all_of(hyperards_reproducible_genes), names_to = "gene_symbol",
-               values_to = "expression") %>%
-  mutate(relative_expression = pmin(expression / quantile(expression[expression > 0], 0.99), 1),
-         .by = gene_symbol)
-
-umap_theme <- list(
-  coord_fixed(),
-  theme_void(),
-  theme(plot.title = element_text(hjust = 0.5, size = 11))
-)
-
-cell_type_umap <-
-  ggplot(umap_cells, aes(umap_1, umap_2)) +
-  geom_point(colour = "grey80", size = 0.05) +
-  geom_label_repel(data = umap_cells %>%
-                     summarize(umap_1 = median(umap_1), umap_2 = median(umap_2), .by = cell_type),
-                   aes(label = cell_type), size = 2.5, label.size = 0, fill = alpha("white", 0.7),
-                   min.segment.length = 0, seed = 1) +
-  umap_theme +
-  labs(title = "Cell types")
-
-plot_gene_umap <- function(gene) {
-  umap_expression %>%
-    filter(gene_symbol == gene) %>%
-    arrange(relative_expression) %>%
-    ggplot(aes(umap_1, umap_2, colour = relative_expression)) +
-    geom_point(size = 0.05) +
-    scale_colour_viridis_c(name = "Relative\nexpression", limits = c(0, 1)) +
-    umap_theme +
-    labs(title = gene)
-}
-
-ggsave(file.path(figure_directory, "Reproducible genes up in HyperARDS, UMAP.png"),
-       wrap_plots(c(list(cell_type_umap), map(hyperards_reproducible_genes, plot_gene_umap)),
-                  ncol = 6) +
-         plot_layout(guides = "collect"),
-       width = 16, height = 9, dpi = 300, bg = "white")
-
-# HyperARDS gene scores. Each cell's score is the mean expression of a set of
-# genes up in HyperARDS minus the mean of control genes matched on average
-# expression (Seurat::AddModuleScore, 24 expression bins, 100 control genes per
-# gene, seed 1); positive scores mean the genes are expressed above matched
-# controls. Three sets are scored: all 16 genes, the 7 ribosomal genes
-# (cytosolic and mitochondrial ribosomal proteins and RACK1), and the other 9.
-#
-# Cells within a subject are not independent, so phenotypes are compared at
-# the subject level: each point is a subject's mean score, over all of the
-# subject's cells or within one cell type. The all-cells score reflects cell
-# composition as bulk RNA-seq does; the within-cell-type scores remove it. No
-# test is made, with 4 HyperARDS and 5 HypoARDS subjects.
-ribosomal_genes <- str_subset(hyperards_reproducible_genes, "^RP[SL]\\d|^MRP[SL]\\d|^RACK1$")
-gene_sets <- list(
-  "All 16 genes" = hyperards_reproducible_genes,
-  "Ribosomal genes" = ribosomal_genes,
-  "Other genes" = setdiff(hyperards_reproducible_genes, ribosomal_genes)
-)
-
-hyperards_gene_scores <-
-  Seurat::AddModuleScore(scseq_seurat, features = unname(gene_sets), assay = "RNA",
-                         name = "gene_set_score", seed = 1)[[]] %>%
-  as_tibble(rownames = "cell") %>%
-  transmute(cell, sample_id, cell_type = topcells,
-            phenotype = factor(phenotype, levels = names(phenotype_labels)),
-            !!!set_names(syms(paste0("gene_set_score", seq_along(gene_sets))), names(gene_sets))) %>%
-  pivot_longer(all_of(names(gene_sets)), names_to = "gene_set", values_to = "score") %>%
-  mutate(gene_set = factor(gene_set, levels = names(gene_sets)))
-
-all_gene_scores <-
-  hyperards_gene_scores %>%
-  filter(gene_set == "All 16 genes") %>%
-  inner_join(umap_cells %>% dplyr::select(cell, umap_1, umap_2), by = "cell")
-
-score_limit <- quantile(abs(all_gene_scores$score), 0.99)
-
-score_umap <-
-  all_gene_scores %>%
-  arrange(abs(score)) %>%
-  ggplot(aes(umap_1, umap_2, colour = pmax(pmin(score, score_limit), -score_limit))) +
-  geom_point(size = 0.05) +
-  facet_wrap(~ phenotype, labeller = as_labeller(phenotype_labels)) +
-  scale_colour_gradient2(name = "HyperARDS\ngene score", low = "#2166AC", mid = "grey85",
-                         high = "#B2182B", midpoint = 0, limits = c(-1, 1) * score_limit) +
-  coord_fixed() +
-  theme_void() +
-  theme(strip.text = element_text(size = 12, margin = margin(b = 4)))
-
-ggsave(file.path(figure_directory, "HyperARDS gene score by phenotype, UMAP.png"),
-       score_umap, width = 11, height = 5, dpi = 300, bg = "white")
-
-# Scores over all of a subject's cells, then within each cell type.
-score_groups <- c("All cells", cell_types_shown)
-grouped_scores <-
-  bind_rows(
-    hyperards_gene_scores %>% mutate(group = "All cells"),
-    hyperards_gene_scores %>% filter(cell_type %in% cell_types_shown) %>% mutate(group = cell_type)
-  ) %>%
-  mutate(group = factor(group, levels = score_groups))
-
-subject_mean_scores <-
-  grouped_scores %>%
-  summarize(score = mean(score), cells = n(), .by = c(sample_id, phenotype, group, gene_set))
-
-score_by_cell_type <-
-  ggplot(grouped_scores, aes(phenotype, score)) +
-  geom_violin(aes(fill = phenotype), colour = NA, alpha = 0.35, scale = "width") +
-  geom_hline(yintercept = 0, linetype = "dotted", colour = "grey50") +
-  geom_point(data = subject_mean_scores, aes(colour = phenotype, size = cells),
-             position = position_jitter(width = 0.08, seed = 1)) +
-  facet_grid(gene_set ~ group, labeller = labeller(group = label_wrap_gen(12))) +
-  scale_fill_manual(values = phenotype_colours, guide = "none") +
-  scale_colour_manual(values = phenotype_colours, guide = "none") +
-  scale_size_area(name = "Cells from\nsubject", max_size = 4) +
-  scale_x_discrete(labels = c(HypoARDS = "Hypo", HyperARDS = "Hyper")) +
-  theme_classic() +
-  theme(strip.background = element_blank(),
-        panel.border = element_rect(fill = NA, linewidth = 1)) +
-  labs(x = "", y = "HyperARDS gene score",
-       caption = "Violins: all cells. Points: subject means.")
-
-ggsave(file.path(figure_directory, "HyperARDS gene score by cell type and phenotype.pdf"),
-       score_by_cell_type, width = 15, height = 10)
-
-# Composition and score together, one point per subject: the percentage of
-# the subject's cells that are T or NK cells against the subject's mean
-# score over all cells.
-subject_composition_scores <-
-  hyperards_gene_scores %>%
-  summarize(t_nk_percent = 100 * mean(cell_type %in% c("T cell", "NK cell")),
-            score = mean(score), cells = n(),
-            .by = c(sample_id, phenotype, gene_set))
-
-composition_score_plot <-
-  ggplot(subject_composition_scores, aes(t_nk_percent, score, colour = phenotype)) +
-  geom_hline(yintercept = 0, linetype = "dotted", colour = "grey50") +
-  geom_point(aes(size = cells)) +
-  geom_text_repel(aes(label = sample_id), size = 3, show.legend = FALSE, seed = 1) +
-  facet_wrap(~ gene_set, nrow = 1, scales = "free_y") +
-  scale_colour_manual(values = phenotype_colours, labels = phenotype_labels, name = NULL) +
-  scale_size_area(name = "Cells", max_size = 5) +
-  theme_classic() +
-  theme(strip.background = element_blank(),
-        panel.border = element_rect(fill = NA, linewidth = 1)) +
-  labs(x = "T and NK cells (% of subject's cells)",
-       y = "Subject mean HyperARDS gene score, all cells")
-
-ggsave(file.path(figure_directory, "HyperARDS gene score and T and NK cell fraction.pdf"),
-       composition_score_plot, width = 12, height = 4.5)
 
 # Figures 2A and E2: GSVA scores --------------------------------------------
 
@@ -536,6 +297,64 @@ bulk_and_single_cell_plot <-
 ggsave(file.path(figure_directory, "Figure E3 - Bulk and single-cell pathways.pdf"),
        bulk_and_single_cell_plot, width = 9,
        height = 2 + 0.4 * n_distinct(bulk_and_single_cell_gsea$pathway))
+
+# Ligand-receptor figures -------------------------------------------------
+
+cellchat_cell_types <- c("T cell", "Monocyte", "Dendritic cell", "Neutrophil", "Alveolar mac",
+                         "Monocyte-derived mac", "NK cell", "B cell")
+# The published figures place and colour the cell types in the order of
+# cellchat_cell_types, with CellChat's default palette. CellChat itself orders
+# them alphabetically, so the figures reorder them.
+cell_type_colours <- set_names(scPalette(length(cellchat_cell_types)), cellchat_cell_types)
+
+# Differential interaction network: a circle of cell types whose edges show
+# the difference, HyperARDS minus HypoARDS, in the total strength of inferred
+# interactions from each cell type to each other.
+# Red edges are higher in HyperARDS and blue edges higher in HypoARDS; edge
+# width scales with the difference. The merged object from script 6 holds
+# HypoARDS first and HyperARDS second, so comparison = c(1, 2).
+merged_cellchat <- readRDS(file.path(results_directory, "cellchat_hyperards_hypoards.rds"))
+
+# CellChat 1.5.0 sets a loop angle only on self-loops and leaves the other
+# edges missing, which igraph 1.x replaced with 0 but igraph 2.x cannot (its
+# default is empty). Restore the default of 0 for this session.
+igraph_default_values <- igraph:::i.default.values
+igraph_default_values$edge$loop.angle <- 0
+assignInNamespace("i.default.values", igraph_default_values, ns = "igraph")
+stopifnot(identical(names(merged_cellchat@net), c("HypoARDS", "HyperARDS")),
+          setequal(levels(merged_cellchat@idents$joint), cellchat_cell_types))
+# netVisual_diffInteraction places cell types in the row order of the
+# interaction matrices.
+for (phenotype in names(merged_cellchat@net)) {
+  merged_cellchat@net[[phenotype]]$weight <-
+    merged_cellchat@net[[phenotype]]$weight[cellchat_cell_types, cellchat_cell_types]
+}
+
+pdf(file.path(figure_directory, "Ligand-receptor interactions, HyperARDS vs HypoARDS.pdf"),
+    width = 6, height = 6)
+netVisual_diffInteraction(merged_cellchat, comparison = c(1, 2), measure = "weight",
+                          weight.scale = TRUE, color.use = cell_type_colours,
+                          title.name = "Interaction strength")
+dev.off()
+
+# Chord diagrams of the interactions in Supplementary Data E6 that are up in
+# each phenotype, from ligand-expressing to receptor-expressing cell types,
+# one page each. netVisual_chord_gene needs only the cell types from its
+# CellChat object when the interactions are supplied, so a minimal object
+# stands in.
+ligand_receptor_path <- file.path(results_directory, "Supplementary Data E6 - Ligand-receptor pairs.xlsx")
+cell_type_holder <- new("CellChat", idents = factor(character(0), levels = cellchat_cell_types))
+upregulated_sheets <- c(HyperARDS = "6A - Hyperinflammatory ARDS",
+                        HypoARDS = "6B - Hypoinflammatory ARDS")
+
+pdf(file.path(figure_directory, "Ligand-receptor pairs up in each phenotype.pdf"),
+    width = 10, height = 10)
+iwalk(upregulated_sheets, function(sheet, phenotype) {
+  netVisual_chord_gene(cell_type_holder, net = as.data.frame(read_excel(ligand_receptor_path, sheet)),
+                       color.use = cell_type_colours, lab.cex = 0.5,
+                       title.name = paste("Upregulated signaling in", phenotype))
+})
+dev.off()
 
 message("Figures written to ", figure_directory, ":")
 message(paste(" ", list.files(figure_directory), collapse = "\n"))

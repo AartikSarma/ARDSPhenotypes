@@ -74,9 +74,6 @@ voom_expression <- voomWithDreamWeights(expression_list[expressed_genes, ], mode
                                         model_subjects,
                                         BPPARAM = parallel_workers)
 
-# The published fit used dream's default degrees of freedom; it is named here
-# so that a change of default in variancePartition cannot alter the results.
-# dream drops genes whose mixed model fails to fit; they are counted below.
 phenotype_fit <- dream(voom_expression, model_formula, model_subjects,
                        ddf = "adaptive", BPPARAM = parallel_workers)
 failed_model_errors <- attr(phenotype_fit, "errors")
@@ -106,5 +103,4 @@ if (length(failed_model_errors) > 0) {
     table() %>%
     print()
 }
-message("Genes with FDR < 0.05: ", sum(phenotype_results$fdr < 0.05),
-        "; FDR < 0.1: ", sum(phenotype_results$fdr < 0.1))
+message("Genes with FDR < 0.1: ", sum(phenotype_results$fdr < 0.1))

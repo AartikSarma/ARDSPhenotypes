@@ -2,8 +2,8 @@
 #
 # Tests for genes differentially expressed between HyperARDS and HypoARDS
 # within each of the five most common cell types in the tracheal aspirate
-# single-cell RNA-seq (GSE200848), the five reported in Supplementary Data E5,
-# using MAST's hurdle model. The model and settings are those of
+# single-cell RNA-seq (GSE200848), using MAST's hurdle model. 
+# The model and settings are the same as in
 # scripts/preprint_2022/ARDS Phenotypes - 4 - scMAST.R, adapted from
 # https://github.com/RGLab/MAST/issues/147:
 #

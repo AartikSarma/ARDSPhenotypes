@@ -6,16 +6,8 @@
 #
 #   ~ rna_batch + phenotype + sex + age
 #
-# The steps follow rnaseq_to_limma() in tidyseq v0.1.2
-# (https://github.com/AartikSarma/tidyseq/tree/v0.1.2), which fit the published
-# model: genes with zero counts in every sample are removed, library sizes are
-# TMM-normalized, genes are kept by filterByExpr() with an intercept-only
-# design, and the model is fit with voomLmFit() followed by robust empirical
-# Bayes moderation. Age enters unscaled, as in the published model.
-#
 # Age is top-coded at 90 (script 0), whereas the published model used exact
-# ages, so results may differ subtly from those published. Additional data are
-# available on reasonable request.
+# ages, so results may differ subtly from those published. 
 #
 # Run from the repository root after script 0. Writes
 #   data/results/ajrccm_2025/noncovid_bulk_hyper_vs_hypo.csv
@@ -73,5 +65,4 @@ message("Non-COVID bulk RNA-seq: ", nrow(model_subjects), " samples (",
         paste(names(table(model_subjects$phenotype)), table(model_subjects$phenotype),
               collapse = ", "), "); ", sum(expressed_genes), " of ", nrow(counts),
         " genes passed the expression filter")
-message("Genes with FDR < 0.05: ", sum(phenotype_results$fdr < 0.05),
-        "; FDR < 0.1: ", sum(phenotype_results$fdr < 0.1))
+message("Genes with FDR < 0.1: ", sum(phenotype_results$fdr < 0.1))

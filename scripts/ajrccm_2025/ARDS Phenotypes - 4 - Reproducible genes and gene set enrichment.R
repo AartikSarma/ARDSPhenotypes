@@ -18,7 +18,7 @@
 #    - single-cell: fgsea(), at least 15 genes per set, and only pathways with
 #      FDR < 0.1 kept.
 #    Reactome sets come from msigdbr 7.5.1 (MSigDB 7.5.1), the release used in
-#    2024; newer releases change the sets and the results.
+#    2024; newer releases will change the sets and the results.
 #
 #    fgsea estimates p values by random sampling, so every call is seeded.
 #    The bulk analysis uses many permutations (nPermSimple = 100000) and a

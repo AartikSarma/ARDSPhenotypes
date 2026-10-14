@@ -29,6 +29,7 @@
 # Run from the repository root after script 0. Writes to
 # data/results/ajrccm_2025/:
 #   Supplementary Data E6 - Ligand-receptor pairs.xlsx
+#   cellchat_hyperards_hypoards.rds   merged CellChat object (HypoARDS, HyperARDS)
 
 library(tidyverse)
 library(Seurat)
@@ -90,3 +91,7 @@ phenotype_interactions <- list(
 
 writexl::write_xlsx(phenotype_interactions,
                     file.path(results_directory, "Supplementary Data E6 - Ligand-receptor pairs.xlsx"))
+
+# The merged object is saved for the figures (script 7), which need the
+# interaction networks of both phenotypes.
+saveRDS(merged_cellchat, file.path(results_directory, "cellchat_hyperards_hypoards.rds"))
