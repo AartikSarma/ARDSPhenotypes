@@ -16,7 +16,7 @@ All inputs are public and are downloaded by script 0 from GEO SuperSeries [GSE20
 
 The repository also holds one published table, `published_results/Supplementary Data E1 - Bulk RNASeq.xlsx`. The published bulk models used exact ages and voom weights from samples that are not in GEO, so the gene set analyses start from this table rather than from refits.
 
-GEO holds no raw reads (UCSF IRB restriction). Age is a covariate of the bulk models and is being added to GEO; patients older than 89 are recorded as ">89" and analysed as 90. Until GEO carries age, scripts 1, 2 and 5 stop with an error. Additional data are available on reasonable request.
+GEO holds no raw reads (UCSF IRB restriction). Age, a covariate of the bulk models, comes from GEO, where patients older than 89 are recorded as ">89"; the analyses set those ages to 90. Additional data are available on reasonable request.
 
 ## Setup
 
