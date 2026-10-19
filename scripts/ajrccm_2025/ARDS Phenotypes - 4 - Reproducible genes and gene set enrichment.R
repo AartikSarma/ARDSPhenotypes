@@ -14,9 +14,9 @@
 # 2. Reactome gene set enrichment (fgseaMultilevel) on genes ranked by log2
 #    fold change, with sets of at least 30 genes (tidyseq v0.1.2
 #    dge_to_gsea()), run the same way for bulk and single-cell results
-#    (Supplementary Data E4). Bulk fold changes are averaged per gene symbol;
-#    single-cell sheets report only pathways with FDR < 0.1. The published
-#    single-cell analysis used sets of at least 15 genes.
+#    (Supplementary Data E4, which lists every pathway tested). Bulk fold
+#    changes are averaged per gene symbol. The published single-cell analysis
+#    used sets of at least 15 genes and reported only pathways with FDR < 0.1.
 #    Reactome sets come from msigdbr 7.5.1 (MSigDB 7.5.1), the release used in
 #    2024; newer releases will change the sets and the results.
 #
@@ -139,7 +139,7 @@ run_gsea <- function(results) {
 }
 
 bulk_gsea <- map(bulk_results, run_gsea)
-single_cell_gsea <- map(single_cell_results, ~ run_gsea(.x) %>% filter(padj < fdr_threshold))
+single_cell_gsea <- map(single_cell_results, run_gsea)
 
 tidy_gsea <- function(gsea_results) {
   gsea_results %>%
@@ -176,10 +176,12 @@ bulk_gsea_shared_pathways <-
 write_csv(bulk_gsea_shared_pathways,
           file.path(results_directory, "bulk_gsea_shared_pathways.csv"))
 
-# Pathways shared by the bulk cohorts that are also enriched, in the same
-# direction as in the non-COVID cohort, in at least one cell type.
+# Pathways shared by the bulk cohorts that are also enriched (FDR < 0.1), in
+# the same direction as in the non-COVID cohort, in at least one cell type.
 single_cell_nes <-
-  imap(single_cell_gsea, ~ tidy_gsea(.x) %>% transmute(pathway, comparison = .y, NES)) %>%
+  imap(single_cell_gsea, ~ tidy_gsea(.x) %>%
+         filter(fdr < fdr_threshold) %>%
+         transmute(pathway, comparison = .y, NES)) %>%
   list_rbind()
 
 bulk_and_single_cell_gsea <-

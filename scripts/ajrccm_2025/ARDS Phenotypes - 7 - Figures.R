@@ -292,7 +292,8 @@ bulk_and_single_cell_plot <-
                          high = phenotype_colours[["HyperARDS"]], midpoint = 0) +
   scale_size_continuous(range = c(2, 6), guide = "none") +
   theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
+  theme(axis.line = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1),
         panel.border = element_rect(fill = NA, linewidth = 2),
         strip.background = element_blank()) +
   labs(x = "", y = "")
