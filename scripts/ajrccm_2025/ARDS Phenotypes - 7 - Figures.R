@@ -7,15 +7,16 @@
 #   Figure 2B      Reactome pathways enriched in the same direction in both
 #                  bulk cohorts (a curated subset)
 #   Figure E2      GSVA scores, first COVID sample per subject
-#   Figure E3      the shared bulk pathways that are also enriched in at least
+#   Figure E4      the shared bulk pathways that are also enriched in at least
 #                  one single-cell type
 #   Ligand-receptor figures (script 6 results):
 #     the differential interaction network between phenotypes, and a chord
 #     diagram of the interactions up in each phenotype (Data E6)
 #
 # Phenotypes are coloured from the Okabe-Ito palette. Continuous values that
-# run from low to high use viridis palettes; Figure E3's NES, centred on zero,
-# uses a diverging scale between the phenotype colours. The ligand-receptor
+# run from low to high use viridis palettes; Figure E4's NES, centred on zero,
+# uses a diverging scale between the phenotype colours. Figure 2B keeps the
+# diverging scale of the published figure. The ligand-receptor
 # figures keep the cell type colours of the published figures (CellChat's
 # default palette).
 # Heatmap dendrograms are ordered by dendsort.
@@ -201,7 +202,9 @@ ggsave(file.path(figure_directory, "Figure E2 - GSVA scores, first COVID sample.
 # Figure 2B: shared bulk pathways ------------------------------------------
 
 # Pathways chosen for display from the pathways enriched in the same direction
-# in both bulk cohorts.
+# in both bulk cohorts. NES runs from blue (higher in HypoARDS) through white to
+# orange (higher in HyperARDS), the ColorBrewer Set2 colours of the published
+# figure.
 pathways_to_plot <- c(
   "NONSENSE MEDIATED DECAY NMD",
   "SELENOAMINO ACID METABOLISM",
@@ -248,7 +251,7 @@ shared_pathway_plot <-
   mutate(pathway = str_wrap(pathway, indent = 14, width = 43)) %>%
   ggplot(aes(cohort, reorder(pathway, nes_product), size = abs(NES), colour = NES)) +
   geom_point() +
-  scale_colour_viridis_c(option = "plasma") +
+  scale_colour_gradient2(low = "#8DA0CB", mid = "white", high = "#FC8D62", midpoint = 0) +
   scale_size_continuous(range = c(4, 8), guide = "none") +
   theme_classic() +
   theme(axis.line = element_blank(),
@@ -261,7 +264,7 @@ shared_pathway_plot <-
 ggsave(file.path(figure_directory, "Figure 2B - Shared bulk pathways.pdf"),
        shared_pathway_plot, width = 8, height = 12)
 
-# Figure E3: bulk and single-cell pathways ---------------------------------
+# Figure E4: bulk and single-cell pathways ---------------------------------
 
 # NES is positive for pathways enriched in HyperARDS and negative for those
 # enriched in HypoARDS, so it is coloured on a diverging scale from the
@@ -294,7 +297,7 @@ bulk_and_single_cell_plot <-
         strip.background = element_blank()) +
   labs(x = "", y = "")
 
-ggsave(file.path(figure_directory, "Figure E3 - Bulk and single-cell pathways.pdf"),
+ggsave(file.path(figure_directory, "Figure E4 - Bulk and single-cell pathways.pdf"),
        bulk_and_single_cell_plot, width = 9,
        height = 2 + 0.4 * n_distinct(bulk_and_single_cell_gsea$pathway))
 
