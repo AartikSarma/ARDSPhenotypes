@@ -57,11 +57,6 @@ counts <-
 stopifnot(identical(colnames(counts), model_subjects$sample_id))
 rownames(model_subjects) <- model_subjects$sample_id
 
-if (anyNA(model_subjects$age)) {
-  stop("Age is missing for ", sum(is.na(model_subjects$age)), " samples. The models adjust ",
-       "for age, which must be available from GEO; see script 0.")
-}
-
 parallel_workers <- MulticoreParam(max(1, parallel::detectCores() - 2))
 
 # HypoARDS is the reference level, so the phenotype coefficient is the log2

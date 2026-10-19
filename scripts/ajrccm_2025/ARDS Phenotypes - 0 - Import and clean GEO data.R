@@ -21,10 +21,7 @@
 #
 # Age, a covariate of the bulk models, is taken from GEO, which records it as
 # a whole number of years or as ">89" for patients older than 89 (HIPAA Safe
-# Harbor). ">89" and any age above 89 become 90, flagged by age_top_coded. Age
-# is missing until GEO adds it to the sample records; the scripts that model
-# it stop until then. getGEO reuses cached series matrices, so once GEO adds
-# age, delete data/geo/raw/*_series_matrix.txt.gz and rerun this script.
+# Harbor). ">89" and any age above 89 become 90, flagged by age_top_coded.
 
 library(tidyverse)
 library(GEOquery)
@@ -54,18 +51,14 @@ geo_supplementary_url <- function(accession, file_name) {
          accession, "/suppl/", file_name)
 }
 
-# getGEO reuses a series matrix already present in destdir. A series without
-# an age characteristic gets a missing age.
+# getGEO reuses a series matrix already present in destdir.
 read_geo_sample_annotations <- function(accession) {
   expression_set <- getGEO(accession, destdir = raw_directory,
                            GSEMatrix = TRUE, getGPL = FALSE)[[1]]
-  annotations <-
-    pData(expression_set) %>%
+  pData(expression_set) %>%
     as_tibble() %>%
     rename_with(~ .x %>% str_remove(":ch1$") %>% str_to_lower() %>%
                   str_replace_all("[^a-z0-9]+", "_"))
-  if (!"age" %in% colnames(annotations)) annotations$age <- NA_character_
-  annotations
 }
 
 noncovid_counts_path <- download_if_missing(
@@ -124,7 +117,7 @@ phenotype_levels <- c("HypoARDS", "HyperARDS")
 top_coded_age <- 90
 parse_geo_age <- function(geo_age) {
   geo_age <- str_trim(as.character(geo_age))
-  stopifnot(all(is.na(geo_age) | geo_age == ">89" | str_detect(geo_age, "^\\d+$")))
+  stopifnot(all(geo_age == ">89" | str_detect(geo_age, "^\\d+$")))
   numeric_age <- if_else(geo_age == ">89", top_coded_age, suppressWarnings(as.numeric(geo_age)))
   pmin(numeric_age, top_coded_age)
 }
@@ -237,10 +230,8 @@ saveRDS(scseq_seurat, file.path(clean_directory, "scseq_seurat.rds"))
 
 summarize_bulk_cohort <- function(bulk_subjects, cohort_name) {
   message(cohort_name, ": ", nrow(bulk_subjects), " samples from ",
-          n_distinct(bulk_subjects$subject_id), " subjects; age missing for ",
-          sum(is.na(bulk_subjects$age)), " samples, top-coded at ", top_coded_age, " for ",
-          n_distinct(bulk_subjects$subject_id[bulk_subjects$age_top_coded %in% TRUE]),
-          " subjects")
+          n_distinct(bulk_subjects$subject_id), " subjects; age top-coded at ", top_coded_age,
+          " for ", n_distinct(bulk_subjects$subject_id[bulk_subjects$age_top_coded]), " subjects")
   bulk_subjects %>%
     distinct(subject_id, phenotype) %>%
     count(phenotype, name = "subjects") %>%

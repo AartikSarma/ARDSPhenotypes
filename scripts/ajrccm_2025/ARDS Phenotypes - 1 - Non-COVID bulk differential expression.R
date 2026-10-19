@@ -33,11 +33,6 @@ counts <-
   as.matrix()
 stopifnot(identical(colnames(counts), model_subjects$sample_id))
 
-if (anyNA(model_subjects$age)) {
-  stop("Age is missing for ", sum(is.na(model_subjects$age)), " samples. The models adjust ",
-       "for age, which must be available from GEO; see script 0.")
-}
-
 # HypoARDS is the reference level, so the phenotype coefficient is the log2
 # fold change of HyperARDS over HypoARDS.
 design <- model.matrix(~ rna_batch + phenotype + sex + age, data = model_subjects)

@@ -60,12 +60,6 @@ covid_counts <- read_counts("covid_bulk_counts.csv")
 stopifnot(identical(colnames(noncovid_counts), noncovid_subjects$sample_id),
           identical(colnames(covid_counts), covid_subjects$sample_id))
 
-if (anyNA(c(noncovid_subjects$age, covid_subjects$age))) {
-  stop("Age is missing for ", sum(is.na(c(noncovid_subjects$age, covid_subjects$age))),
-       " samples. The phenotype tests adjust for age, which must be available from GEO; ",
-       "see script 0.")
-}
-
 # Signature -----------------------------------------------------------------
 
 noncovid_published <- read_excel(bulk_path, sheet = "S1A - ALI Limma")
