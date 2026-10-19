@@ -11,21 +11,21 @@
 # 1. Reproducible genes: Ensembl genes with FDR < 0.1 in both bulk cohorts. Each is
 #    called up in HyperARDS or in HypoARDS by the sign of its non-COVID fold
 #    change, and described from MyGene.info (Supplementary Data E2).
-# 2. Reactome gene set enrichment (fgsea) on genes ranked by log2 fold change
-#    (Supplementary Data E4):
-#    - bulk: mean fold change per gene symbol, fgseaMultilevel(), at least 30
-#      genes per set (tidyseq v0.1.2 dge_to_gsea());
-#    - single-cell: fgsea(), at least 15 genes per set, and only pathways with
-#      FDR < 0.1 kept.
+# 2. Reactome gene set enrichment (fgseaMultilevel) on genes ranked by log2
+#    fold change, with sets of at least 30 genes (tidyseq v0.1.2
+#    dge_to_gsea()), run the same way for bulk and single-cell results
+#    (Supplementary Data E4). Bulk fold changes are averaged per gene symbol;
+#    single-cell sheets report only pathways with FDR < 0.1. The published
+#    single-cell analysis used sets of at least 15 genes.
 #    Reactome sets come from msigdbr 7.5.1 (MSigDB 7.5.1), the release used in
 #    2024; newer releases will change the sets and the results.
 #
-#    fgsea estimates p values by random sampling, so every call is seeded.
-#    The bulk analysis uses many permutations (nPermSimple = 100000) and a
-#    precise multilevel estimate (sampleSize = 1001, eps = 0), because
-#    several pathways lie close to FDR 0.1.
+#    fgsea estimates p values by random sampling, so every call is seeded,
+#    with many permutations (nPermSimple = 100000) and a precise multilevel
+#    estimate (sampleSize = 1001, eps = 0), because several pathways lie
+#    close to FDR 0.1.
 
-# 3. Pathways for Figures 2B and E3: pathways with FDR < 0.1 and the same sign
+# 3. Pathways for Figures 2B and E4: pathways with FDR < 0.1 and the same sign
 #    in both bulk cohorts, joined to the single-cell scores.
 #
 # Run from the repository root after script 3. Writes to
@@ -34,7 +34,7 @@
 #   Supplementary Data E4 - GSEA results.xlsx
 #   reproducible_genes.csv                    the genes behind Figure 1C
 #   bulk_gsea_shared_pathways.csv             Figure 2B data
-#   bulk_and_single_cell_gsea.csv             Figure E3 data
+#   bulk_and_single_cell_gsea.csv             Figure E4 data
 
 library(tidyverse)
 library(readxl)
@@ -125,7 +125,7 @@ clean_pathway_name <- function(pathway) {
   pathway %>% str_remove("^REACTOME_") %>% str_replace_all("_", " ")
 }
 
-run_bulk_gsea <- function(results) {
+run_gsea <- function(results) {
   ranked_fold_changes <-
     results %>%
     filter(!is.na(log2_fold_change), !is.na(gene_symbol)) %>%
@@ -138,21 +138,8 @@ run_bulk_gsea <- function(results) {
     as_tibble()
 }
 
-run_single_cell_gsea <- function(results) {
-  ranked_fold_changes <-
-    results %>%
-    filter(!is.na(log2_fold_change)) %>%
-    dplyr::select(gene_symbol, log2_fold_change) %>%
-    deframe()
-  set.seed(20240724)
-  fgsea(pathways = reactome_gene_sets, stats = ranked_fold_changes,
-        minSize = 15, nPermSimple = 10000) %>%
-    as_tibble() %>%
-    filter(padj < fdr_threshold)
-}
-
-bulk_gsea <- map(bulk_results, run_bulk_gsea)
-single_cell_gsea <- map(single_cell_results, run_single_cell_gsea)
+bulk_gsea <- map(bulk_results, run_gsea)
+single_cell_gsea <- map(single_cell_results, ~ run_gsea(.x) %>% filter(padj < fdr_threshold))
 
 tidy_gsea <- function(gsea_results) {
   gsea_results %>%
@@ -174,7 +161,7 @@ gsea_sheets <- list(
 writexl::write_xlsx(gsea_sheets,
                     file.path(results_directory, "Supplementary Data E4 - GSEA results.xlsx"))
 
-# Pathways for Figures 2B and E3 ------------------------------------------
+# Pathways for Figures 2B and E4 ------------------------------------------
 
 bulk_gsea_shared_pathways <-
   gsea_sheets[["S4A - ALI BulkRNA"]] %>%
