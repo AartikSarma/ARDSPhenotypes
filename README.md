@@ -87,9 +87,7 @@ uvr run "scripts/ajrccm_2025/ARDS Phenotypes - 0 - Import and clean GEO data.R"
 | 6 | Ligand-receptor analysis: CellChat | Supplementary Data E6 |
 | 7 | Figures | `data/results/ajrccm_2025/figures/` |
 
-Results go to `data/results/ajrccm_2025/`. Script 3 takes over an hour. Script 7 needs scripts 0, 3, 4, 5 and 6. Each script's header states its model, its inputs and its outputs.
-
-Fold changes and enrichment scores are HyperARDS relative to HypoARDS throughout.
+Results go to `data/results/ajrccm_2025/`. Fold changes and enrichment scores are HyperARDS relative to HypoARDS throughout.
 
 ## License
 
