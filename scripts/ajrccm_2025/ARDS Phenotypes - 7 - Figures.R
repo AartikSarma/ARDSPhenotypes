@@ -9,16 +9,21 @@
 #   Figure E2      GSVA scores, first COVID sample per subject
 #   Figure E4      the shared bulk pathways that are also enriched in at least
 #                  one single-cell type
-#   Ligand-receptor figures (script 6 results):
-#     the differential interaction network between phenotypes, and a chord
-#     diagram of the interactions up in each phenotype (Data E6)
+#   Figure 3A, 3B  UMAP projections of the single-cell transcriptomes by cell
+#                  type and by phenotype
+#   Figure 3C      the differential interaction network between phenotypes
+#                  (script 6 results)
+#   Figure 3D      the CellChat pathways whose information flow differs most
+#                  between phenotypes (script 6 results)
+#   Chord diagrams of the ligand-receptor interactions up in each phenotype
+#   (Data E6)
 #
 # Phenotypes are coloured from the Okabe-Ito palette. Continuous values that
 # run from low to high use viridis palettes; Figure E4's NES, centred on zero,
-# uses a diverging scale between the phenotype colours. Figure 2B keeps the
-# diverging scale of the published figure. The ligand-receptor
-# figures keep the cell type colours of the published figures (CellChat's
-# default palette).
+# uses a diverging scale between the phenotype colours. Figures 2B, 3A, 3B and
+# 3D keep the colours of the published figures (ColorBrewer Set2 for the
+# phenotypes, Set3 for the cell types), and the ligand-receptor networks keep
+# the cell type colours of the published figures (CellChat's default palette).
 # Heatmap dendrograms are ordered by dendsort.
 #
 # Run from the repository root after scripts 0, 3, 4, 5 and 6. Writes PDFs to
@@ -32,6 +37,7 @@ library(dendsort)
 library(ggrepel)
 library(patchwork)
 library(viridis)
+library(Seurat)
 library(CellChat)
 
 clean_directory <- file.path(here::here(), "data", "geo", "clean")
@@ -42,6 +48,9 @@ dir.create(figure_directory, recursive = TRUE, showWarnings = FALSE)
 
 # Okabe-Ito vermillion and blue.
 phenotype_colours <- c(HyperARDS = "#D55E00", HypoARDS = "#0072B2")
+# ColorBrewer Set2 orange and blue, the phenotype colours of the published
+# Figures 2B, 3B and 3D.
+published_phenotype_colours <- c(HyperARDS = "#FC8D62", HypoARDS = "#8DA0CB")
 phenotype_labels <- c(HypoARDS = "Hypoinflammatory", HyperARDS = "Hyperinflammatory")
 cohort_titles <- c("non-COVID" = "ALI - Non-COVID ARDS", "COVID" = "COMET - COVID ARDS")
 
@@ -251,7 +260,8 @@ shared_pathway_plot <-
   mutate(pathway = str_wrap(pathway, indent = 14, width = 43)) %>%
   ggplot(aes(cohort, reorder(pathway, nes_product), size = abs(NES), colour = NES)) +
   geom_point() +
-  scale_colour_gradient2(low = "#8DA0CB", mid = "white", high = "#FC8D62", midpoint = 0) +
+  scale_colour_gradient2(low = published_phenotype_colours[["HypoARDS"]], mid = "white",
+                         high = published_phenotype_colours[["HyperARDS"]], midpoint = 0) +
   scale_size_continuous(range = c(4, 8), guide = "none") +
   theme_classic() +
   theme(axis.line = element_blank(),
@@ -302,6 +312,50 @@ ggsave(file.path(figure_directory, "Figure E4 - Bulk and single-cell pathways.pd
        bulk_and_single_cell_plot, width = 9,
        height = 2 + 0.4 * n_distinct(bulk_and_single_cell_gsea$pathway))
 
+# Figure 3A, 3B: single-cell UMAP projections ------------------------------
+
+# The GEO object carries the UMAP embedding computed by the preprint scripts
+# (scripts/preprint_2022/ARDS Phenotypes - 3 - scSeq UMAPandCluster.R: the
+# integrated assay, scaled with subject regressed out, 30 principal
+# components). Recomputing it would give a different layout, so the figures
+# draw the stored embedding of all 26,429 cells. Cell types are coloured in
+# the order of the published legend with ColorBrewer Set3, as published.
+umap_cell_type_colours <- c(
+  "Alveolar mac" = "#8DD3C7", "Monocyte-derived mac" = "#FFFFB3", "Monocyte" = "#BEBADA",
+  "Dendritic cell" = "#FB8072", "Neutrophil" = "#80B1D3", "T cell" = "#FDB462",
+  "B cell" = "#B3DE69", "NK cell" = "#FCCDE5", "Hematopoietic stem cell" = "#D9D9D9",
+  "Epithelial cell" = "#BC80BD", "Other" = "#CCEBC5"
+)
+
+scseq_seurat <- readRDS(file.path(clean_directory, "scseq_seurat.rds"))
+stopifnot(setequal(unique(scseq_seurat$topcells), names(umap_cell_type_colours)))
+scseq_seurat$topcells <- factor(scseq_seurat$topcells, levels = names(umap_cell_type_colours))
+
+# Cells are drawn in random order so that no cell type or phenotype hides
+# the others.
+plot_umap <- function(grouping, colours, legend_text_size) {
+  DimPlot(scseq_seurat, reduction = "umap", group.by = grouping, cols = colours,
+          shuffle = TRUE, seed = 1) +
+    theme_classic() +
+    theme(aspect.ratio = 1,
+          axis.line = element_blank(),
+          axis.title = element_text(size = 18),
+          panel.border = element_rect(linewidth = 1.5, fill = NA),
+          legend.position = "inside",
+          legend.position.inside = c(0.02, 0.98),
+          legend.justification = c(0, 1),
+          legend.background = element_blank(),
+          legend.key.size = unit(0.4, "cm"),
+          legend.text = element_text(size = legend_text_size)) +
+    guides(colour = guide_legend(override.aes = list(size = 3))) +
+    labs(x = "UMAP 1", y = "UMAP 2", title = NULL)
+}
+
+ggsave(file.path(figure_directory, "Figure 3A and 3B - Single-cell UMAP.pdf"),
+       plot_umap("topcells", umap_cell_type_colours, 8) |
+         plot_umap("phenotype", published_phenotype_colours, 14),
+       width = 12, height = 6)
+
 # Ligand-receptor figures -------------------------------------------------
 
 cellchat_cell_types <- c("T cell", "Monocyte", "Dendritic cell", "Neutrophil", "Alveolar mac",
@@ -334,12 +388,52 @@ for (phenotype in names(merged_cellchat@net)) {
     merged_cellchat@net[[phenotype]]$weight[cellchat_cell_types, cellchat_cell_types]
 }
 
-pdf(file.path(figure_directory, "Ligand-receptor interactions, HyperARDS vs HypoARDS.pdf"),
+pdf(file.path(figure_directory, "Figure 3C - Differential interaction network.pdf"),
     width = 6, height = 6)
 netVisual_diffInteraction(merged_cellchat, comparison = c(1, 2), measure = "weight",
                           weight.scale = TRUE, color.use = cell_type_colours,
                           title.name = "Interaction strength")
 dev.off()
+
+# Figure 3D: the difference, HyperARDS minus HypoARDS, in the information flow
+# of CellChat pathways, as computed for the published figure. rankNet gives
+# each pathway's information flow in each phenotype, scaled as CellChat
+# scales it for display (contribution.scaled: -1/log of the summed
+# communication probabilities, with flows of 1 or more ranked above the
+# largest), and a Wilcoxon test of the difference between phenotypes. 
+# Two pathways are relabled for clarity: CD45 by its receptor in these data, 
+# MRC1 (PTPRC - MRC1), and VISFATIN by the
+# integrin that NAMPT signals to, alpha5beta1.
+published_pathway_labels <- c("CD45" = "MRC1", "VISFATIN" = "α5β1")
+
+information_flow_difference <-
+  rankNet(merged_cellchat, mode = "comparison", comparison = c(1, 2), stacked = FALSE,
+          do.stat = TRUE, return.data = TRUE)$signaling.contribution %>%
+  mutate(adjusted_p = p.adjust(pvalues)) %>%
+  filter(adjusted_p < 0.1) %>%
+  pivot_wider(id_cols = name, names_from = group, values_from = contribution.scaled) %>%
+  transmute(pathway = as.character(name), difference = HyperARDS - HypoARDS,
+            higher_in = if_else(difference > 0, "HyperARDS", "HypoARDS"))
+
+information_flow_plot <-
+  information_flow_difference %>%
+  slice_max(abs(difference), n = 5, by = higher_in) %>%
+  mutate(label = coalesce(published_pathway_labels[pathway], pathway)) %>%
+  ggplot(aes(difference, reorder(label, difference), fill = higher_in)) +
+  geom_col() +
+  geom_vline(xintercept = 0) +
+  scale_fill_manual(values = published_phenotype_colours, guide = "none") +
+  theme_classic() +
+  theme(aspect.ratio = 1,
+        axis.line = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_text(size = 14, colour = "black"),
+        axis.title.x = element_text(size = 14),
+        panel.border = element_rect(linewidth = 1, fill = NA)) +
+  labs(x = "Difference in information flow", y = "")
+
+ggsave(file.path(figure_directory, "Figure 3D - Pathway information flow.pdf"),
+       information_flow_plot, width = 6, height = 6, device = cairo_pdf)
 
 # Chord diagrams of the interactions in Supplementary Data E6 that are up in
 # each phenotype, from ligand-expressing to receptor-expressing cell types,
