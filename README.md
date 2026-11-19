@@ -88,9 +88,9 @@ uvr run "scripts/ajrccm_2025/ARDS Phenotypes - 0 - Import and clean GEO data.R"
 | 7 | Figures | `data/results/ajrccm_2025/figures/` |
 | 8 | Plasma proteomics: Wilcoxon tests (needs the Olink data) | Supplementary Data E7, Figure 4 |
 
-The Olink plasma proteomic data are not public but are available on reasonable request, so `run_all.R` does not run script 8; its header lists the files it expects in the git-ignored folder `data/olink/`. Results go to `data/results/ajrccm_2025/`. Script 3 takes over an hour. Script 7 needs scripts 0, 3, 4, 5 and 6. Each script's header states its model, its inputs and its outputs.
+The Olink plasma proteomic data are not public but are available on reasonable request, so `run_all.R` does not run script 8; its header lists the files it expects in the git-ignored folder `data/olink/`.
 
-Fold changes and enrichment scores are HyperARDS relative to HypoARDS throughout.
+Results go to `data/results/ajrccm_2025/`. Fold changes and enrichment scores are HyperARDS relative to HypoARDS throughout.
 
 ## License
 
