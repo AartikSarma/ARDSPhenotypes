@@ -7,8 +7,9 @@
 #   uvr run run_all.R -- 4       resume from script 4
 #
 # Each script runs with the same R as this one; the project's .Rprofile puts
-# the uvr package library first. Script 3 (MAST) takes over an hour. Scripts
-# 1, 2 and 5 stop until GEO provides age; see README.md.
+# the uvr package library first. Script 3 (MAST) takes over an hour. Script 8
+# (plasma proteomics) is not run because its Olink data are not public; see
+# README.md.
 
 script_directory <- file.path("scripts", "ajrccm_2025")
 script_numbers <- 0:7

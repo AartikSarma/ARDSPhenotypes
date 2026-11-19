@@ -2,11 +2,11 @@
 
 Analysis code for the transcriptomic study of hyperinflammatory (HyperARDS) and hypoinflammatory (HypoARDS) phenotypes of acute respiratory distress syndrome in tracheal aspirates, published in the *American Journal of Respiratory and Critical Care Medicine* (2025;211(12):2352).
 
-`scripts/ajrccm_2025/` reproduces the paper's transcriptomic analyses from the data deposited in GEO. `scripts/preprint_2022/` holds the scripts behind the 2022 medRxiv preprint, kept for reference; they read data that are not public.
+`scripts/ajrccm_2025/` reproduces the paper's transcriptomic analyses from the data deposited in GEO, and holds the code for its plasma proteomic analysis, whose data are not public. `scripts/preprint_2022/` holds the scripts behind the 2022 medRxiv preprint, kept for reference; they read data that are not public.
 
 ## Data
 
-All inputs are public and are downloaded by script 0 from GEO SuperSeries [GSE200849](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE200849):
+All inputs except the plasma proteomic data are public and are downloaded by script 0 from GEO SuperSeries [GSE200849](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE200849):
 
 | Series | Data |
 |---|---|
@@ -86,8 +86,9 @@ uvr run "scripts/ajrccm_2025/ARDS Phenotypes - 0 - Import and clean GEO data.R"
 | 5 | HyperARDS signature scores: GSVA | Supplementary Data E3 |
 | 6 | Ligand-receptor analysis: CellChat | Supplementary Data E6 |
 | 7 | Figures | `data/results/ajrccm_2025/figures/` |
+| 8 | Plasma proteomics: Wilcoxon tests (needs the Olink data) | Supplementary Data E7, Figure 4 |
 
-Results go to `data/results/ajrccm_2025/`. Script 3 takes over an hour. Script 7 needs scripts 0, 3, 4, 5 and 6. Each script's header states its model, its inputs and its outputs.
+The Olink plasma proteomic data are not public but are available on reasonable request, so `run_all.R` does not run script 8; its header lists the files it expects in the git-ignored folder `data/olink/`. Results go to `data/results/ajrccm_2025/`. Script 3 takes over an hour. Script 7 needs scripts 0, 3, 4, 5 and 6. Each script's header states its model, its inputs and its outputs.
 
 Fold changes and enrichment scores are HyperARDS relative to HypoARDS throughout.
 
